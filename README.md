@@ -76,13 +76,32 @@ If the binary is already installed at `/usr/local/bin/axxon-agent` (e.g., copied
 
 ## Upgrade
 
-Re-run the installer. It detects the existing installation and performs an in-place upgrade:
+To upgrade the agent binary to a newer version:
 
 ```bash
+# Stop the agent
+sudo systemctl stop axxon-agent
+
+# Replace the binary (download from Artifact Portal or copy via SCP)
+sudo cp /path/to/new/axxon-agent /usr/local/bin/axxon-agent
+sudo chmod +x /usr/local/bin/axxon-agent
+
+# Restart
+sudo systemctl start axxon-agent
+
+# Verify
+sudo journalctl -u axxon-agent -n 20 --no-pager
+```
+
+Alternatively, remove the existing binary and re-run the installer to download the latest version:
+
+```bash
+sudo systemctl stop axxon-agent
+sudo rm /usr/local/bin/axxon-agent
 curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash
 ```
 
-Existing configuration and certificates are preserved. The agent restarts automatically with the new binary.
+Configuration, certificates, and data are preserved across upgrades.
 
 ## File Locations
 
