@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.4"
+SCRIPT_VERSION="1.3.5"
 
 # --- Constants ---
 ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
@@ -584,9 +584,14 @@ main() {
         warn "Agent may not be running. Check logs with: sudo journalctl -u $SERVICE_NAME -f"
     fi
 
+    # Display agent version
+    local agent_version
+    agent_version=$("$INSTALL_BIN" --version 2>/dev/null || echo "unknown")
+
     echo ""
     info "Installation complete!"
     echo ""
+    echo "  Agent:   ${agent_version}"
     echo "  Status:  sudo systemctl status $SERVICE_NAME"
     echo "  Logs:    sudo journalctl -u $SERVICE_NAME -f"
     echo "  Config:  $CONFIG_DIR/config.yaml"
