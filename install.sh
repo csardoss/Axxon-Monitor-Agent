@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.1"
+SCRIPT_VERSION="1.3.2"
 
 # --- Constants ---
 ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
@@ -503,8 +503,8 @@ main() {
     # Prompt for gateway address
     header "Configuration"
     local gateway_addr=""
-    read -rp "  Gateway address (host:port) [gateway:18443]: " gateway_addr </dev/tty
-    gateway_addr="${gateway_addr:-gateway:18443}"
+    read -rp "  Gateway address (host:port) [axxonmonitor.digitalsecurityguard.com:18443]: " gateway_addr </dev/tty
+    gateway_addr="${gateway_addr:-axxonmonitor.digitalsecurityguard.com:18443}"
 
     # Prompt for enrollment token
     local enrollment_token=""
