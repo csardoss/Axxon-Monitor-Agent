@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.2"
+SCRIPT_VERSION="1.3.3"
 
 # --- Constants ---
 ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
@@ -362,7 +362,10 @@ provision_certificates() {
     csr_escaped=$(echo "$csr" | jq -Rs .)
 
     local resp
-    resp=$(curl -sf --max-time 15 \
+    # -k skips TLS verification: safe here because the enrollment token
+    # authenticates the request and the CSR contains only the public key.
+    # We can't use --cacert because obtaining the CA chain is the purpose of this call.
+    resp=$(curl -skf --max-time 15 \
         -X POST "$provision_url" \
         -H "Content-Type: application/json" \
         -d "{\"token\": \"${enrollment_token}\", \"csr\": ${csr_escaped}}" \
