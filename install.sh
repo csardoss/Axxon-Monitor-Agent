@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.5"
+SCRIPT_VERSION="1.3.6"
 
 # --- Constants ---
 ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
@@ -428,7 +428,7 @@ configure_agent() {
     local gateway_addr="$1"
     local enrollment_token="$2"
 
-    mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+    mkdir -p "$CONFIG_DIR" "$DATA_DIR" /opt/axxon-agent
 
     if [ -f "$CONFIG_DIR/config.yaml" ]; then
         warn "Config already exists at $CONFIG_DIR/config.yaml — not overwriting."
@@ -478,7 +478,7 @@ WorkingDirectory=/var/lib/axxon-agent
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/axxon-agent /etc/axxon-agent
+ReadWritePaths=/var/lib/axxon-agent /etc/axxon-agent /opt/axxon-agent
 PrivateTmp=true
 
 [Install]
