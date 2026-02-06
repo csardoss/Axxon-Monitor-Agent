@@ -74,9 +74,35 @@ If you have a pre-created API token (`apt_...`), paste it when prompted. The bin
 ### 3. Skip / Manual
 If the binary is already installed at `/usr/local/bin/axxon-agent` (e.g., copied via SCP), choose skip. The installer proceeds with configuration only.
 
-## Upgrade
+## Updates
 
-To upgrade the agent binary to a newer version:
+### Automatic Updates (Managed Rollouts)
+
+Agents update automatically when a new version is published. The process is fully managed from the gateway — no SSH access to agent machines is needed.
+
+**How it works:**
+
+1. The gateway periodically checks the Artifact Portal for new agent versions
+2. New binaries are downloaded and cached on the gateway with SHA256 verification
+3. An administrator creates a **rollout** from the Agent Manager UI, setting a rollout percentage (e.g., 10% → 50% → 100%)
+4. The gateway pushes an `UpdateAvailable` message to eligible agents over the existing gRPC connection
+5. Each agent downloads the binary from the gateway, verifies the SHA256 checksum, and stages it
+6. The agent restarts via systemd and performs a post-update health check (gateway connection + heartbeats)
+7. If the health check fails or the agent crash-loops, it **automatically rolls back** to the previous version
+
+**Safety features:**
+
+- **Staged rollouts** — roll out to a percentage of agents before going fleet-wide
+- **Automatic pause** — if the failure rate exceeds 10%, the rollout pauses automatically
+- **Automatic rollback** — failed health checks or 3+ rapid restarts trigger rollback to the previous version
+- **Failed version tracking** — versions that failed on an agent are not retried without manual intervention
+- **Admin controls** — pause, resume, or force-rollback from the Agent Manager UI
+
+No action is required on agent machines for automatic updates.
+
+### Manual Upgrade
+
+If you need to upgrade an agent manually (e.g., the agent is offline or automatic updates are not yet enabled):
 
 ```bash
 # Stop the agent
@@ -93,7 +119,7 @@ sudo systemctl start axxon-agent
 sudo journalctl -u axxon-agent -n 20 --no-pager
 ```
 
-Alternatively, remove the existing binary and re-run the installer to download the latest version:
+Or remove the existing binary and re-run the installer to download the latest version:
 
 ```bash
 sudo systemctl stop axxon-agent
