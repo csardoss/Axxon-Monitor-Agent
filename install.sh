@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.3.1"
 
 # --- Constants ---
 ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
@@ -503,12 +503,12 @@ main() {
     # Prompt for gateway address
     header "Configuration"
     local gateway_addr=""
-    read -rp "  Gateway address (host:port) [gateway:18443]: " gateway_addr
+    read -rp "  Gateway address (host:port) [gateway:18443]: " gateway_addr </dev/tty
     gateway_addr="${gateway_addr:-gateway:18443}"
 
     # Prompt for enrollment token
     local enrollment_token=""
-    read -rp "  Enrollment token (optional, press Enter to skip): " enrollment_token
+    read -rp "  Enrollment token (optional, press Enter to skip): " enrollment_token </dev/tty
 
     # Download binary
     if [ ! -f "$INSTALL_BIN" ]; then
@@ -520,7 +520,7 @@ main() {
         echo "    3) Skip (binary already installed or manual install)"
         echo ""
         local download_method=""
-        read -rp "  Method [1]: " download_method
+        read -rp "  Method [1]: " download_method </dev/tty
         download_method="${download_method:-1}"
 
         case "$download_method" in
@@ -534,7 +534,7 @@ main() {
                 ;;
             2)
                 local api_token=""
-                read -rp "  API token: " api_token
+                read -rp "  API token: " api_token </dev/tty
                 if [ -z "$api_token" ]; then
                     error "API token is required."
                 fi
