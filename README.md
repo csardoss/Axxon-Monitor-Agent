@@ -8,37 +8,26 @@ Lightweight monitoring agent for AxxonOne VMS servers. Collects telemetry (CPU, 
 curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash
 ```
 
-The installer will prompt you for:
+The interactive installer will prompt you for:
 1. **Gateway address** — the central monitoring server (default: `axxonmonitor.digitalsecurityguard.com:18443`)
-2. **Enrollment token** — optional one-time token from the gateway admin
-3. **TLS certificates** — path to certificate files for mTLS authentication
+2. **Enrollment token** — one-time token from the gateway admin (used for automatic certificate provisioning)
+3. **Download method** — device pairing via Artifact Portal, API token, or skip if binary is already installed
 
 ## Prerequisites
 
-- Linux (amd64 or arm64)
-- `curl`, `sha256sum`, `systemctl`
-- Network access to the gateway on port 18443
-- TLS certificates from your gateway administrator
+- Linux (amd64)
+- `curl`, `sha256sum`, `systemctl`, `jq`, `openssl`
+- Network access to the gateway on port 18443 (outbound only)
 
 ## Installation
 
-### Step 1: Get TLS Certificates
+### Step 1: Get an Enrollment Token
 
-Before installing, obtain these 3 files from your gateway administrator:
+Ask your administrator to generate a token from the Agent Manager UI. Tokens are single-use and valid for 24 hours. The enrollment token serves two purposes:
+- **Identity** — registers the agent with the gateway
+- **Certificate provisioning** — the installer uses the token to automatically generate a private key, submit a CSR, and receive signed TLS certificates
 
-| File | Description |
-|------|-------------|
-| `agent.crt` | Agent TLS certificate |
-| `agent.key` | Agent private key |
-| `ca.crt` | CA certificate chain |
-
-Place them in a directory (e.g., `/tmp/agent-certs/`).
-
-### Step 2: Get an Enrollment Token (Optional)
-
-If your gateway requires enrollment, ask your administrator to generate a token from the Agent Manager UI. Tokens are single-use and valid for 24 hours.
-
-### Step 3: Run the Installer
+### Step 2: Run the Installer
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash
@@ -54,13 +43,13 @@ sudo ./install.sh
 
 The installer will:
 1. Prompt for gateway address and enrollment token
-2. Download the agent binary (Artifact Portal with device pairing, or GitHub releases as fallback)
+2. Download the agent binary from the **Artifact Portal** (device pairing or API token)
 3. Verify the SHA256 checksum
-4. Install TLS certificates
+4. Generate a private key locally and provision TLS certificates via CSR
 5. Create configuration at `/etc/axxon-agent/config.yaml`
-6. Install and start the systemd service
+6. Install and start a hardened systemd service
 
-### Step 4: Verify
+### Step 3: Verify
 
 ```bash
 # Check service status
@@ -70,31 +59,30 @@ sudo systemctl status axxon-agent
 sudo journalctl -u axxon-agent -f
 ```
 
-The agent should connect to the gateway and appear in the Agent Manager UI.
+The agent should connect to the gateway and appear in the Agent Manager UI within 30 seconds.
+
+## Binary Download Methods
+
+The installer offers three ways to download the agent binary:
+
+### 1. Device Pairing (default)
+The installer starts a pairing flow with the Artifact Portal. You'll see a URL and pairing code — open the URL in a browser, approve the device, and the binary downloads automatically.
+
+### 2. API Token
+If you have a pre-created API token (`apt_...`), paste it when prompted. The binary downloads directly without browser interaction.
+
+### 3. Skip / Manual
+If the binary is already installed at `/usr/local/bin/axxon-agent` (e.g., copied via SCP), choose skip. The installer proceeds with configuration only.
 
 ## Upgrade
 
-Upgrade to the latest release:
+Re-run the installer. It detects the existing installation and performs an in-place upgrade:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash -s -- --upgrade
+curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash
 ```
 
-Or if you have the script locally:
-
-```bash
-sudo ./install.sh --upgrade
-```
-
-This downloads the latest binary and restarts the service. Configuration is preserved.
-
-## Uninstall
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash -s -- --uninstall
-```
-
-This stops the service and removes the binary. Configuration and data directories are preserved (remove manually if desired).
+Existing configuration and certificates are preserved. The agent restarts automatically with the new binary.
 
 ## File Locations
 
@@ -102,10 +90,10 @@ This stops the service and removes the binary. Configuration and data directorie
 |------|-------------|
 | `/usr/local/bin/axxon-agent` | Agent binary |
 | `/etc/axxon-agent/config.yaml` | Configuration file |
-| `/etc/axxon-agent/agent.crt` | Agent TLS certificate |
-| `/etc/axxon-agent/agent.key` | Agent private key |
+| `/etc/axxon-agent/agent.crt` | Agent TLS certificate (auto-provisioned) |
+| `/etc/axxon-agent/agent.key` | Agent private key (never leaves the machine) |
 | `/etc/axxon-agent/ca.crt` | CA certificate chain |
-| `/etc/axxon-agent/agent-id` | Assigned agent ID (auto-generated) |
+| `/etc/axxon-agent/agent-id` | Assigned agent ID (auto-generated on enrollment) |
 | `/var/lib/axxon-agent/alarms.db` | Local alarm buffer (SQLite) |
 
 ## Configuration
@@ -118,17 +106,15 @@ gateway_addr: "axxonmonitor.digitalsecurityguard.com:18443"
 
 # Identity (one of these)
 enrollment_token: "enroll_..."    # First-time enrollment
-# agent_id: "uuid-here"          # Or set directly
+# agent_id: "uuid-here"          # Set automatically after enrollment
 
-# TLS certificates
+# TLS certificates (auto-provisioned by installer)
 cert_file: "/etc/axxon-agent/agent.crt"
 key_file: "/etc/axxon-agent/agent.key"
 ca_file: "/etc/axxon-agent/ca.crt"
 
 # AxxonOne server (local connection)
 axxon_port: 80                    # AxxonOne HTTP API port
-# axxon_username: ""              # Set via AGENT_AXXON_USERNAME env var
-# axxon_password: ""              # Set via AGENT_AXXON_PASSWORD env var
 
 # Alarm buffer
 alarm_db_path: "/var/lib/axxon-agent/alarms.db"
@@ -184,9 +170,9 @@ openssl verify -CAfile /etc/axxon-agent/ca.crt /etc/axxon-agent/agent.crt
 openssl x509 -in /etc/axxon-agent/agent.crt -noout -subject -issuer -dates
 ```
 
-### Agent connects but shows "Pending"
+### Agent connects but shows "Unassigned"
 
-This is normal. An administrator needs to assign the agent to a site/server in the Agent Manager UI. Once assigned, the agent will begin collecting telemetry and alarms.
+This is normal for newly enrolled agents. An administrator needs to assign the agent to a site/server in the Agent Manager UI. Once assigned, the agent begins collecting telemetry and alarms.
 
 ### Network connectivity
 
@@ -203,7 +189,7 @@ openssl s_client -connect axxonmonitor.digitalsecurityguard.com:18443 \
 
 ### Firewall
 
-The agent makes an **outbound** connection to the gateway on port **18443** (gRPC/TLS). Ensure this port is open for outbound traffic. No inbound ports need to be opened on the agent server.
+The agent makes an **outbound** connection to the gateway on port **18443** (gRPC/TLS). No inbound ports need to be opened on the agent server.
 
 ### Restart / Reset
 
@@ -211,7 +197,7 @@ The agent makes an **outbound** connection to the gateway on port **18443** (gRP
 # Restart the agent
 sudo systemctl restart axxon-agent
 
-# Full reset (clears alarm buffer and agent ID)
+# Full reset (clears alarm buffer and agent ID — will re-enroll)
 sudo systemctl stop axxon-agent
 sudo rm -f /var/lib/axxon-agent/alarms.db /etc/axxon-agent/agent-id
 sudo systemctl start axxon-agent
@@ -222,12 +208,22 @@ sudo systemctl start axxon-agent
 | Category | Metrics | Interval |
 |----------|---------|----------|
 | AI Efficiency | IPS, FPS per detector | 30s |
-| Archive | Write speed, depth, usage | 30s |
-| System | CPU, memory, network, load | 30s |
-| GPU | Utilization, memory, temperature (via NVML) | 30s |
-| Storage | Disk usage, archive volumes | 30s |
-| Services | License expiry, service state, errors | 5 min |
-| Alarms | Detector events with clustering | Hourly fetch |
+| Archive Channels | Write FPS, bitrate, loss, starving status | 30s |
+| System | CPU, memory, network, load averages | 30s |
+| GPU | Utilization, memory usage | 30s |
+| Storage | Disk usage, archive volumes, archive depth | 5 min |
+| Disk Health | SMART status, temperature | 5 min |
+| Services | License expiry, service state, error counts | 5 min |
+| Camera Counts | Total and active cameras | 5 min |
+| Alarms | Detector events with severity and acknowledgements | Continuous |
+
+## Security
+
+- **mTLS** — All communication is encrypted and mutually authenticated
+- **CSR-based provisioning** — Private keys are generated locally and never leave the agent machine
+- **Systemd hardening** — `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`
+- **No inbound ports** — Agent initiates all connections outbound
+- **Enrollment tokens** — Single-use, time-limited, revocable
 
 ## License
 
