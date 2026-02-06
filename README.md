@@ -104,6 +104,27 @@ No action is required on agent machines for automatic updates.
 
 If you need to upgrade an agent manually (e.g., the agent is offline or automatic updates are not yet enabled):
 
+#### Option A: Re-run the installer (recommended)
+
+Remove only the binary, then re-run the installer to download the latest version:
+
+```bash
+sudo systemctl stop axxon-agent
+sudo rm /usr/local/bin/axxon-agent
+curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash
+```
+
+When prompted:
+- **Gateway address** — press Enter (existing config is preserved)
+- **Enrollment token** — press Enter to skip (existing certs and agent ID are preserved)
+- **Download method** — choose device pairing or API token to download the new binary
+
+The installer skips configuration and certificate provisioning when they already exist. The agent reconnects to the gateway as the same agent with its existing site assignment. No new enrollment token is needed.
+
+> **Important:** Do NOT delete `/etc/axxon-agent/` or `/var/lib/axxon-agent/`. Only delete the binary at `/usr/local/bin/axxon-agent`. Deleting the config directory would require new certificates and a new enrollment token.
+
+#### Option B: Direct binary replacement
+
 ```bash
 # Stop the agent
 sudo systemctl stop axxon-agent
@@ -118,16 +139,6 @@ sudo systemctl start axxon-agent
 # Verify
 sudo journalctl -u axxon-agent -n 20 --no-pager
 ```
-
-Or remove the existing binary and re-run the installer to download the latest version:
-
-```bash
-sudo systemctl stop axxon-agent
-sudo rm /usr/local/bin/axxon-agent
-curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash
-```
-
-Configuration, certificates, and data are preserved across upgrades.
 
 ## File Locations
 
