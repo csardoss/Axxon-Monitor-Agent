@@ -42,6 +42,9 @@ warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
 error()   { echo -e "${RED}[!]${NC} $*" >&2; exit 1; }
 header()  { echo -e "\n${CYAN}${BOLD}$*${NC}"; }
 
+# Read from /dev/tty so prompts work when piped via curl | bash
+prompt()  { read -rp "$1" "$2" </dev/tty; }
+
 # --- Prerequisite checks ---
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -346,7 +349,7 @@ download_agent_binary() {
     echo "    3) Skip (binary already installed manually)"
     echo ""
     local download_method=""
-    read -rp "  Method [1]: " download_method
+    prompt "  Method [1]: " download_method
     download_method="${download_method:-1}"
 
     case "$download_method" in
@@ -354,7 +357,7 @@ download_agent_binary() {
             if ! artifact_portal_download; then
                 echo ""
                 warn "Artifact Portal download failed."
-                read -rp "  Try GitHub releases as fallback? [Y/n]: " use_fallback
+                prompt "  Try GitHub releases as fallback? [Y/n]: " use_fallback
                 if [[ ! "$use_fallback" =~ ^[Nn]$ ]]; then
                     if ! github_release_download; then
                         error "All download methods failed. Install the binary manually to $INSTALL_BIN"
@@ -402,7 +405,7 @@ install_certificates() {
     echo ""
 
     local cert_source=""
-    read -rp "  Path to certificate directory (or press Enter to skip): " cert_source
+    prompt "  Path to certificate directory (or press Enter to skip): " cert_source
 
     if [ -n "$cert_source" ]; then
         cert_source="${cert_source%/}"
@@ -551,7 +554,7 @@ uninstall_agent() {
     header "Uninstalling Agent"
 
     echo ""
-    read -rp "  This will stop and remove the agent. Continue? [y/N]: " confirm
+    prompt "  This will stop and remove the agent. Continue? [y/N]: " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         info "Cancelled."
         exit 0
@@ -612,17 +615,17 @@ main() {
     # Prompt for gateway address
     header "Configuration"
     local gateway_addr=""
-    read -rp "  Gateway address (host:port) [axxonmonitor.digitalsecurityguard.com:18443]: " gateway_addr
+    prompt "  Gateway address (host:port) [axxonmonitor.digitalsecurityguard.com:18443]: " gateway_addr
     gateway_addr="${gateway_addr:-axxonmonitor.digitalsecurityguard.com:18443}"
 
     # Prompt for enrollment token
     local enrollment_token=""
-    read -rp "  Enrollment token (optional, press Enter to skip): " enrollment_token
+    prompt "  Enrollment token (optional, press Enter to skip): " enrollment_token
 
     # Download binary
     if [ -f "$INSTALL_BIN" ]; then
         echo ""
-        read -rp "  Agent binary already exists. Reinstall? [y/N]: " reinstall
+        prompt "  Agent binary already exists. Reinstall? [y/N]: " reinstall
         if [[ "$reinstall" =~ ^[Yy]$ ]]; then
             download_agent_binary
         else
