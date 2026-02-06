@@ -2,8 +2,9 @@
 #
 # Interactive installer for AxxonOne Monitoring Agent (Linux).
 #
-# Downloads the agent binary from GitHub releases, configures it,
-# and installs as a systemd service.
+# Downloads the agent binary via:
+#   1. Artifact Portal (device pairing) — primary
+#   2. GitHub releases — fallback
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/csardoss/Axxon-Monitor-Agent/main/install.sh | sudo bash
@@ -13,8 +14,16 @@
 set -euo pipefail
 
 # --- Constants ---
+ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
+ORG_SLUG="axxon-monitor-site"
+APP_ID="axxon-agent-installer"
+PROJECT="axxon-monitor-site"
+TOOL="axxon-monitor-agent"
+PAIR_TIMEOUT=600  # 10 minutes
+
 GITHUB_REPO="csardoss/Axxon-Monitor-Agent"
 GITHUB_API="https://api.github.com/repos/${GITHUB_REPO}"
+
 INSTALL_BIN="/usr/local/bin/axxon-agent"
 CONFIG_DIR="/etc/axxon-agent"
 DATA_DIR="/var/lib/axxon-agent"
@@ -68,31 +77,216 @@ detect_platform() {
     fi
 
     PLATFORM="${os}-${arch}"
+    PLATFORM_ARCH="${os}-${arch}"
     info "Platform: ${PLATFORM}"
 }
 
-# --- GitHub release download ---
-download_latest_release() {
-    header "Download Agent Binary"
+get_instance_id() {
+    if [ -f /etc/machine-id ]; then
+        cat /etc/machine-id
+    else
+        hostname | sha256sum | cut -d' ' -f1
+    fi
+}
+
+# ===========================================================================
+# Download Method 1: Artifact Portal (device pairing)
+# ===========================================================================
+artifact_portal_download() {
+    local instance_id
+    instance_id=$(get_instance_id)
+    local my_hostname
+    my_hostname=$(hostname -f 2>/dev/null || hostname)
+
+    header "Artifact Portal — Device Pairing"
+    info "Starting device pairing with Artifact Portal..."
+
+    # Step 1: Start pairing
+    local pair_resp
+    pair_resp=$(curl -sf --max-time 10 \
+        -X POST "${ARTIFACT_BASE}/pairing/start" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"org_slug\": \"${ORG_SLUG}\",
+            \"app_id\": \"${APP_ID}\",
+            \"instance_id\": \"${instance_id}\",
+            \"requested_ttl_seconds\": 14400,
+            \"requested_scopes\": [\"download\"],
+            \"metadata\": {
+                \"hostname\": \"${my_hostname}\",
+                \"platform\": \"linux\",
+                \"arch\": \"$(uname -m)\",
+                \"label\": \"AxxonOne Agent installer\"
+            }
+        }" \
+        2>/dev/null) || {
+        warn "Could not reach Artifact Portal."
+        return 1
+    }
+
+    local pairing_code pairing_url expires_in
+    pairing_code=$(echo "$pair_resp" | grep -o '"pairing_code":"[^"]*"' | head -1 | cut -d'"' -f4)
+    pairing_url=$(echo "$pair_resp" | grep -o '"pairing_url":"[^"]*"' | head -1 | cut -d'"' -f4)
+    expires_in=$(echo "$pair_resp" | grep -o '"expires_in":[0-9]*' | head -1 | cut -d: -f2)
+    expires_in="${expires_in:-600}"
+
+    if [ -z "$pairing_code" ]; then
+        warn "Unexpected response from Artifact Portal."
+        return 1
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}Open this URL in your browser to approve this device:${NC}"
+    echo -e "  ${CYAN}https://artifacts.digitalsecurityguard.com${pairing_url}${NC}"
+    echo ""
+    echo -e "  ${BOLD}Pairing code:${NC} ${YELLOW}${pairing_code}${NC}"
+    echo -e "  ${BOLD}Expires in:${NC} ${expires_in} seconds"
+    echo ""
+    info "Waiting for approval..."
+
+    # Step 2: Poll for approval
+    local elapsed=0
+    local exchange_token=""
+    while [ $elapsed -lt $PAIR_TIMEOUT ]; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+
+        local status_resp
+        status_resp=$(curl -sf --max-time 10 \
+            "${ARTIFACT_BASE}/pairing/status/${pairing_code}" 2>/dev/null) || continue
+
+        local status
+        status=$(echo "$status_resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+        if [ "$status" = "approved" ]; then
+            exchange_token=$(echo "$status_resp" | grep -o '"exchange_token":"[^"]*"' | head -1 | cut -d'"' -f4)
+            if [ -z "$exchange_token" ]; then
+                warn "Approved but no exchange token received."
+                return 1
+            fi
+            break
+        elif [ "$status" = "denied" ]; then
+            warn "Pairing request was denied."
+            return 1
+        elif [ "$status" = "expired" ] || [ "$status" = "exchanged" ]; then
+            warn "Pairing request ${status}."
+            return 1
+        fi
+
+        printf "\r  Waiting... %ds / %ds" "$elapsed" "$PAIR_TIMEOUT"
+    done
+    echo ""
+
+    if [ -z "$exchange_token" ]; then
+        warn "Pairing timed out."
+        return 1
+    fi
+
+    info "Approved! Exchanging for access token..."
+
+    # Step 3: Exchange for access token
+    local exchange_resp access_token
+    exchange_resp=$(curl -sf --max-time 10 \
+        -X POST "${ARTIFACT_BASE}/pairing/exchange" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"pairing_code\": \"${pairing_code}\",
+            \"exchange_token\": \"${exchange_token}\"
+        }" \
+        2>/dev/null) || {
+        warn "Token exchange failed."
+        return 1
+    }
+    access_token=$(echo "$exchange_resp" | grep -o '"access_token":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+    if [ -z "$access_token" ]; then
+        warn "No access token received."
+        return 1
+    fi
+
+    info "Token received. Downloading agent binary..."
+
+    # Step 4: Get presigned download URL
+    local presign_resp
+    presign_resp=$(curl -sf --max-time 10 \
+        -X POST "${ARTIFACT_BASE}/presign-latest" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${access_token}" \
+        -d "{
+            \"project\": \"${PROJECT}\",
+            \"tool\": \"${TOOL}\",
+            \"platform_arch\": \"${PLATFORM_ARCH}\",
+            \"latest_filename\": \"axxon-agent\"
+        }" \
+        2>/dev/null) || {
+        warn "Failed to get download URL."
+        return 1
+    }
+
+    local download_url expected_sha256 file_size
+    download_url=$(echo "$presign_resp" | grep -o '"url":"[^"]*"' | head -1 | cut -d'"' -f4)
+    expected_sha256=$(echo "$presign_resp" | grep -o '"sha256":"[^"]*"' | head -1 | cut -d'"' -f4)
+    file_size=$(echo "$presign_resp" | grep -o '"size_bytes":[0-9]*' | head -1 | cut -d: -f2)
+    file_size="${file_size:-unknown}"
+
+    if [ -z "$download_url" ]; then
+        warn "No download URL returned. The binary may not be available for ${PLATFORM_ARCH}."
+        return 1
+    fi
+
+    info "Downloading (${file_size} bytes)..."
+
+    # Step 5: Download binary
+    local tmp_bin
+    tmp_bin=$(mktemp)
+    if ! curl -fSL --max-time 300 -o "$tmp_bin" "$download_url" 2>/dev/null; then
+        rm -f "$tmp_bin"
+        warn "Download failed."
+        return 1
+    fi
+
+    # Step 6: SHA256 verification
+    if [ -n "$expected_sha256" ]; then
+        local actual_sha256
+        actual_sha256=$(sha256sum "$tmp_bin" | cut -d' ' -f1)
+        if [ "$actual_sha256" != "$expected_sha256" ]; then
+            rm -f "$tmp_bin"
+            error "SHA256 mismatch! Expected: ${expected_sha256}, Got: ${actual_sha256}"
+        fi
+        info "SHA256 verified."
+    fi
+
+    # Install binary
+    mv "$tmp_bin" "$INSTALL_BIN"
+    chmod 755 "$INSTALL_BIN"
+    info "Binary installed to $INSTALL_BIN (via Artifact Portal)"
+    return 0
+}
+
+# ===========================================================================
+# Download Method 2: GitHub Releases (fallback)
+# ===========================================================================
+github_release_download() {
+    header "GitHub Releases — Fallback Download"
 
     info "Fetching latest release from GitHub..."
 
-    # Get latest release info
     local release_json
     release_json=$(curl -sf --max-time 15 "${GITHUB_API}/releases/latest" 2>/dev/null) || {
-        error "Could not fetch latest release from GitHub. Check network connectivity."
+        warn "Could not fetch latest release from GitHub."
+        return 1
     }
 
     local tag_name
     tag_name=$(echo "$release_json" | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)
 
     if [ -z "$tag_name" ]; then
-        error "No releases found. Please check ${GITHUB_API}/releases"
+        warn "No releases found on GitHub."
+        return 1
     fi
 
     info "Latest version: ${tag_name}"
 
-    # Find the binary asset for our platform
     local asset_name="axxon-agent-${PLATFORM}"
     local sha_name="${asset_name}.sha256"
 
@@ -100,22 +294,22 @@ download_latest_release() {
     download_url=$(echo "$release_json" | grep -o "\"browser_download_url\":\"[^\"]*${asset_name}\"" | head -1 | cut -d'"' -f4)
 
     if [ -z "$download_url" ]; then
-        error "No binary found for platform '${PLATFORM}' in release ${tag_name}."
+        warn "No binary found for platform '${PLATFORM}' in release ${tag_name}."
+        return 1
     fi
 
     local sha_url
     sha_url=$(echo "$release_json" | grep -o "\"browser_download_url\":\"[^\"]*${sha_name}\"" | head -1 | cut -d'"' -f4)
 
-    # Download binary
     info "Downloading ${asset_name}..."
     local tmp_bin
     tmp_bin=$(mktemp)
     if ! curl -fSL --max-time 300 -o "$tmp_bin" "$download_url" 2>/dev/null; then
         rm -f "$tmp_bin"
-        error "Download failed. URL: $download_url"
+        warn "Download failed."
+        return 1
     fi
 
-    # SHA256 verification
     if [ -n "$sha_url" ]; then
         info "Verifying SHA256 checksum..."
         local expected_sha
@@ -131,14 +325,60 @@ download_latest_release() {
         else
             warn "Could not fetch checksum file. Skipping verification."
         fi
-    else
-        warn "No checksum file found in release. Skipping verification."
     fi
 
-    # Install binary
     mv "$tmp_bin" "$INSTALL_BIN"
     chmod 755 "$INSTALL_BIN"
-    info "Binary installed to $INSTALL_BIN (${tag_name})"
+    info "Binary installed to $INSTALL_BIN (${tag_name}, via GitHub)"
+    return 0
+}
+
+# ===========================================================================
+# Download orchestrator — tries methods in order
+# ===========================================================================
+download_agent_binary() {
+    header "Download Agent Binary"
+
+    echo ""
+    echo "  Choose download method:"
+    echo "    1) Artifact Portal (device pairing — recommended)"
+    echo "    2) GitHub releases (direct download)"
+    echo "    3) Skip (binary already installed manually)"
+    echo ""
+    local download_method=""
+    read -rp "  Method [1]: " download_method
+    download_method="${download_method:-1}"
+
+    case "$download_method" in
+        1)
+            if ! artifact_portal_download; then
+                echo ""
+                warn "Artifact Portal download failed."
+                read -rp "  Try GitHub releases as fallback? [Y/n]: " use_fallback
+                if [[ ! "$use_fallback" =~ ^[Nn]$ ]]; then
+                    if ! github_release_download; then
+                        error "All download methods failed. Install the binary manually to $INSTALL_BIN"
+                    fi
+                else
+                    error "Agent binary not available. Install it manually to $INSTALL_BIN"
+                fi
+            fi
+            ;;
+        2)
+            if ! github_release_download; then
+                error "GitHub release download failed. Check network connectivity."
+            fi
+            ;;
+        3)
+            if [ ! -f "$INSTALL_BIN" ]; then
+                error "Agent binary not found at $INSTALL_BIN. Install it manually and re-run."
+            fi
+            info "Using existing binary at $INSTALL_BIN"
+            ;;
+        *)
+            error "Invalid choice."
+            ;;
+    esac
 }
 
 # --- TLS Certificate Installation ---
@@ -165,12 +405,11 @@ install_certificates() {
     read -rp "  Path to certificate directory (or press Enter to skip): " cert_source
 
     if [ -n "$cert_source" ]; then
-        cert_source="${cert_source%/}"  # strip trailing slash
+        cert_source="${cert_source%/}"
 
         local missing=()
         [ -f "$cert_source/agent.crt" ] || missing+=("agent.crt")
         [ -f "$cert_source/agent.key" ] || missing+=("agent.key")
-        # Accept either ca.crt or chain.crt
         local ca_file=""
         if [ -f "$cert_source/ca.crt" ]; then
             ca_file="ca.crt"
@@ -286,11 +525,15 @@ upgrade_agent() {
         error "Agent not installed. Run this script without --upgrade first."
     fi
 
-    local current_version=""
-    current_version=$("$INSTALL_BIN" --version 2>/dev/null || echo "unknown")
-    info "Current version: ${current_version}"
+    info "Downloading latest version..."
 
-    download_latest_release
+    # For upgrades, try GitHub first (simpler, no pairing needed)
+    if ! github_release_download; then
+        warn "GitHub download failed, trying Artifact Portal..."
+        if ! artifact_portal_download; then
+            error "All download methods failed."
+        fi
+    fi
 
     info "Restarting agent..."
     systemctl restart "$SERVICE_NAME" 2>/dev/null || warn "Could not restart service."
@@ -332,7 +575,6 @@ uninstall_agent() {
 
 # --- Main ---
 main() {
-    # Handle flags
     case "${1:-}" in
         --upgrade|-u)
             check_root
@@ -359,7 +601,7 @@ main() {
     esac
 
     echo "============================================"
-    echo "  AxxonOne Agent - Interactive Installer"
+    echo "  AxxonOne Agent — Interactive Installer"
     echo "============================================"
     echo ""
 
@@ -382,12 +624,12 @@ main() {
         echo ""
         read -rp "  Agent binary already exists. Reinstall? [y/N]: " reinstall
         if [[ "$reinstall" =~ ^[Yy]$ ]]; then
-            download_latest_release
+            download_agent_binary
         else
             info "Keeping existing binary."
         fi
     else
-        download_latest_release
+        download_agent_binary
     fi
 
     # Install certificates
@@ -402,7 +644,6 @@ main() {
     # Start
     header "Starting Agent"
 
-    # Check if certs exist before starting
     if [ ! -f "$CONFIG_DIR/agent.crt" ] || [ ! -f "$CONFIG_DIR/agent.key" ] || [ ! -f "$CONFIG_DIR/ca.crt" ]; then
         warn "TLS certificates not found. The agent will NOT start until you install them."
         echo ""
@@ -431,7 +672,7 @@ main() {
     echo "    Status:   sudo systemctl status $SERVICE_NAME"
     echo "    Logs:     sudo journalctl -u $SERVICE_NAME -f"
     echo "    Config:   $CONFIG_DIR/config.yaml"
-    echo "    Upgrade:  curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh | sudo bash -s -- --upgrade"
+    echo "    Upgrade:  sudo ./install.sh --upgrade"
     echo ""
 }
 

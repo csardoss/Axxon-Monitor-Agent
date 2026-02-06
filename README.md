@@ -53,9 +53,9 @@ sudo ./install.sh
 ```
 
 The installer will:
-1. Download the latest agent binary from GitHub releases
-2. Verify the SHA256 checksum
-3. Prompt for gateway address and enrollment token
+1. Prompt for gateway address and enrollment token
+2. Download the agent binary (Artifact Portal with device pairing, or GitHub releases as fallback)
+3. Verify the SHA256 checksum
 4. Install TLS certificates
 5. Create configuration at `/etc/axxon-agent/config.yaml`
 6. Install and start the systemd service
