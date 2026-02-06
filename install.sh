@@ -13,6 +13,9 @@
 #
 set -euo pipefail
 
+# --- Script Version ---
+SCRIPT_VERSION="1.1.0"
+
 # --- Constants ---
 ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
 ORG_SLUG="axxon-monitor-site"
@@ -579,6 +582,10 @@ uninstall_agent() {
 # --- Main ---
 main() {
     case "${1:-}" in
+        --version|-v)
+            echo "install.sh version ${SCRIPT_VERSION}"
+            exit 0
+            ;;
         --upgrade|-u)
             check_root
             check_prerequisites
@@ -592,12 +599,13 @@ main() {
             exit 0
             ;;
         --help|-h)
-            echo "AxxonOne Monitoring Agent Installer"
+            echo "AxxonOne Monitoring Agent Installer v${SCRIPT_VERSION}"
             echo ""
             echo "Usage:"
             echo "  sudo ./install.sh              Install the agent (interactive)"
             echo "  sudo ./install.sh --upgrade    Upgrade to latest version"
             echo "  sudo ./install.sh --uninstall  Remove the agent"
+            echo "  sudo ./install.sh --version    Show script version"
             echo "  sudo ./install.sh --help       Show this help"
             exit 0
             ;;
@@ -605,6 +613,7 @@ main() {
 
     echo "============================================"
     echo "  AxxonOne Agent — Interactive Installer"
+    echo "  Script version: ${SCRIPT_VERSION}"
     echo "============================================"
     echo ""
 
