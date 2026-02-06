@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # --- Script Version ---
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 
 # --- Constants ---
 ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
@@ -57,7 +57,7 @@ check_root() {
 
 check_prerequisites() {
     local missing=()
-    for cmd in curl sha256sum systemctl; do
+    for cmd in curl sha256sum systemctl jq; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             missing+=("$cmd")
         fi
@@ -131,10 +131,9 @@ artifact_portal_download() {
     }
 
     local pairing_code pairing_url expires_in
-    pairing_code=$(echo "$pair_resp" | grep -o '"pairing_code":"[^"]*"' | head -1 | cut -d'"' -f4)
-    pairing_url=$(echo "$pair_resp" | grep -o '"pairing_url":"[^"]*"' | head -1 | cut -d'"' -f4)
-    expires_in=$(echo "$pair_resp" | grep -o '"expires_in":[0-9]*' | head -1 | cut -d: -f2)
-    expires_in="${expires_in:-600}"
+    pairing_code=$(echo "$pair_resp" | jq -r '.pairing_code // empty')
+    pairing_url=$(echo "$pair_resp" | jq -r '.pairing_url // empty')
+    expires_in=$(echo "$pair_resp" | jq -r '.expires_in // 600')
 
     if [ -z "$pairing_code" ]; then
         warn "Unexpected response from Artifact Portal."
@@ -162,10 +161,10 @@ artifact_portal_download() {
             "${ARTIFACT_BASE}/pairing/status/${pairing_code}" 2>/dev/null) || continue
 
         local status
-        status=$(echo "$status_resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+        status=$(echo "$status_resp" | jq -r '.status // "pending"')
 
         if [ "$status" = "approved" ]; then
-            exchange_token=$(echo "$status_resp" | grep -o '"exchange_token":"[^"]*"' | head -1 | cut -d'"' -f4)
+            exchange_token=$(echo "$status_resp" | jq -r '.exchange_token // empty')
             if [ -z "$exchange_token" ]; then
                 warn "Approved but no exchange token received."
                 return 1
@@ -191,30 +190,39 @@ artifact_portal_download() {
     info "Approved! Exchanging for access token..."
 
     # Step 3: Exchange for access token
-    local exchange_resp access_token
-    exchange_resp=$(curl -sf --max-time 10 \
+    local exchange_resp access_token exchange_http_code
+    exchange_resp=$(curl -s --max-time 10 -w "\n%{http_code}" \
         -X POST "${ARTIFACT_BASE}/pairing/exchange" \
         -H "Content-Type: application/json" \
         -d "{
             \"pairing_code\": \"${pairing_code}\",
             \"exchange_token\": \"${exchange_token}\"
         }" \
-        2>/dev/null) || {
-        warn "Token exchange failed."
+        2>/dev/null)
+    exchange_http_code=$(echo "$exchange_resp" | tail -1)
+    exchange_resp=$(echo "$exchange_resp" | sed '$d')
+
+    if [ "$exchange_http_code" -lt 200 ] || [ "$exchange_http_code" -ge 300 ] 2>/dev/null; then
+        warn "Token exchange failed (HTTP ${exchange_http_code})."
+        local err_msg
+        err_msg=$(echo "$exchange_resp" | jq -r '.error // .message // empty' 2>/dev/null)
+        [ -n "$err_msg" ] && warn "  Reason: ${err_msg}"
         return 1
-    }
-    access_token=$(echo "$exchange_resp" | grep -o '"access_token":"[^"]*"' | head -1 | cut -d'"' -f4)
+    fi
+
+    access_token=$(echo "$exchange_resp" | jq -r '.access_token // empty')
 
     if [ -z "$access_token" ]; then
         warn "No access token received."
+        warn "  Response: ${exchange_resp}"
         return 1
     fi
 
     info "Token received. Downloading agent binary..."
 
     # Step 4: Get presigned download URL
-    local presign_resp
-    presign_resp=$(curl -sf --max-time 10 \
+    local presign_resp presign_http_code
+    presign_resp=$(curl -s --max-time 10 -w "\n%{http_code}" \
         -X POST "${ARTIFACT_BASE}/presign-latest" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${access_token}" \
@@ -224,16 +232,22 @@ artifact_portal_download() {
             \"platform_arch\": \"${PLATFORM_ARCH}\",
             \"latest_filename\": \"axxon-agent\"
         }" \
-        2>/dev/null) || {
-        warn "Failed to get download URL."
+        2>/dev/null)
+    presign_http_code=$(echo "$presign_resp" | tail -1)
+    presign_resp=$(echo "$presign_resp" | sed '$d')
+
+    if [ "$presign_http_code" -lt 200 ] || [ "$presign_http_code" -ge 300 ] 2>/dev/null; then
+        warn "Failed to get download URL (HTTP ${presign_http_code})."
+        local err_msg
+        err_msg=$(echo "$presign_resp" | jq -r '.error // .message // empty' 2>/dev/null)
+        [ -n "$err_msg" ] && warn "  Reason: ${err_msg}"
         return 1
-    }
+    fi
 
     local download_url expected_sha256 file_size
-    download_url=$(echo "$presign_resp" | grep -o '"url":"[^"]*"' | head -1 | cut -d'"' -f4)
-    expected_sha256=$(echo "$presign_resp" | grep -o '"sha256":"[^"]*"' | head -1 | cut -d'"' -f4)
-    file_size=$(echo "$presign_resp" | grep -o '"size_bytes":[0-9]*' | head -1 | cut -d: -f2)
-    file_size="${file_size:-unknown}"
+    download_url=$(echo "$presign_resp" | jq -r '.url // empty')
+    expected_sha256=$(echo "$presign_resp" | jq -r '.sha256 // empty')
+    file_size=$(echo "$presign_resp" | jq -r '.size_bytes // "unknown"')
 
     if [ -z "$download_url" ]; then
         warn "No download URL returned. The binary may not be available for ${PLATFORM_ARCH}."
