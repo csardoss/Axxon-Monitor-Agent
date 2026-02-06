@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-SCRIPT_VERSION="1.3.3"
+SCRIPT_VERSION="1.3.4"
 
 # --- Constants ---
 ARTIFACT_BASE="https://artifacts.digitalsecurityguard.com/api/v2"
@@ -478,7 +478,7 @@ WorkingDirectory=/var/lib/axxon-agent
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/axxon-agent
+ReadWritePaths=/var/lib/axxon-agent /etc/axxon-agent
 PrivateTmp=true
 
 [Install]
